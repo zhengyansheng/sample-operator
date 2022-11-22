@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -36,11 +36,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
-	
+
 	samplev1 "github.com/zhengyansheng/sample-operator/api/v1"
 )
 
@@ -52,7 +50,7 @@ const (
 type NginxReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	
+
 	//增加事件记录
 	EventRecorder record.EventRecorder
 }
@@ -73,16 +71,17 @@ type NginxReconciler struct {
 func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	defer utilruntime.HandleCrash()
 	_ = log.FromContext(ctx)
-	
+
 	// TODO(user): your logic here
 	klog.Infof("%s/ %s", req.Namespace, req.Name)
-	
+
 	// 生成 Nginx struct
 	ngx := &samplev1.Nginx{}
 	err := r.Client.Get(ctx, runtimeObjectKey(req), ngx)
 	if errors.IsNotFound(err) || !ngx.DeletionTimestamp.IsZero() {
-		// 不存在时
-		return ctrl.Result{}, r.deleteRelationResource(ctx, req, ngx)
+		//klog.Warning(err, "not found or deleting...")
+		return ctrl.Result{}, nil
+		//return ctrl.Result{}, r.deleteRelationResource(ctx, req, ngx)
 	}
 	if err != nil {
 		return ctrl.Result{}, err
@@ -91,7 +90,7 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if ngx.DeletionTimestamp != nil {
 		return ctrl.Result{}, nil
 	}
-	
+
 	// create deployment
 	foundDeployment := appsv1.Deployment{}
 	err = r.Client.Get(ctx, runtimeObjectKey(req), &foundDeployment)
@@ -105,7 +104,7 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			klog.Error(err, "failed to create Deployment resource")
 			return ctrl.Result{}, err
 		}
-		
+
 		r.EventRecorder.Event(foundDeployment, corev1.EventTypeNormal, "Created", fmt.Sprintf("Created deployment %v", foundDeployment.Name))
 		klog.Info("created Deployment resource for nginx")
 		return ctrl.Result{}, nil
@@ -127,14 +126,15 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 		// update status
 		r.EventRecorder.Eventf(ngx, corev1.EventTypeNormal, "Upgrade", "Scaled replicas %s to %d", foundDeployment.Name, expectedReplicas)
-		ngx.Status.ReadyReplicas = foundDeployment.Status.ReadyReplicas
+		//ngx.Status.ReadyReplicas = foundDeployment.Status.ReadyReplicas
+		ngx.Status.ReadyReplicas = expectedReplicas
 		if err := r.Client.Status().Update(ctx, ngx); err != nil {
 			klog.Error(err, "failed to update nginx status")
 			return ctrl.Result{}, err
 		}
 	}
 	klog.Info("resource status synced")
-	
+
 	return ctrl.Result{}, nil
 }
 
@@ -176,7 +176,7 @@ func (r *NginxReconciler) buildDeployment(c *samplev1.Nginx) (*appsv1.Deployment
 					Containers: []corev1.Container{
 						{
 							Name:            c.Name,
-							Image:           "nginx:latest",
+							Image:           c.Spec.Image,
 							ImagePullPolicy: "IfNotPresent",
 						},
 					},
@@ -184,7 +184,7 @@ func (r *NginxReconciler) buildDeployment(c *samplev1.Nginx) (*appsv1.Deployment
 			},
 		},
 	}
-	
+
 	// owner reference
 	// https://zhuanlan.zhihu.com/p/67406200
 	if err := controllerutil.SetControllerReference(c, deployMent, r.Scheme); err != nil {
@@ -213,21 +213,21 @@ func (r *NginxReconciler) updateHandler(event event.UpdateEvent, limitingInterfa
 
 }
 
-func (r *NginxReconciler) deleteRelationResource(ctx context.Context, req ctrl.Request, ngx *samplev1.Nginx) error {
-	klog.Info("delete relation resource")
-	// delete deployment
-	instance := appsv1.Deployment{}
-	err := r.Client.Get(ctx, runtimeObjectKey(req), &instance)
-	if err != nil {
-		return err
-	}
-	err = r.Client.Delete(ctx, &instance)
-	if err != nil {
-		return err
-	}
-	r.EventRecorder.Event(ngx, corev1.EventTypeNormal, "Updated", "Delete deployment")
-	return nil
-}
+//func (r *NginxReconciler) deleteRelationResource(ctx context.Context, req ctrl.Request, ngx *samplev1.Nginx) error {
+//	klog.Info("delete relation resource")
+//	// delete deployment
+//	instance := appsv1.Deployment{}
+//	err := r.Client.Get(ctx, runtimeObjectKey(req), &instance)
+//	if err != nil {
+//		return err
+//	}
+//	err = r.Client.Delete(ctx, &instance)
+//	if err != nil {
+//		return err
+//	}
+//	r.EventRecorder.Event(ngx, corev1.EventTypeNormal, "Updated", "Delete deployment")
+//	return nil
+//}
 
 func (r *NginxReconciler) getDeploymentSpec(c *samplev1.Nginx, labels map[string]string) appsv1.DeploymentSpec {
 	return appsv1.DeploymentSpec{
@@ -241,14 +241,14 @@ func (r *NginxReconciler) getDeploymentSpec(c *samplev1.Nginx, labels map[string
 				Containers: []corev1.Container{
 					{
 						Name:            c.Name,
-						Image:           "nginx:latest",
+						Image:           c.Spec.Image,
 						ImagePullPolicy: "IfNotPresent",
 					},
 				},
 			},
 		},
 	}
-	
+
 }
 
 func (r *NginxReconciler) getSpecFromDeployment(deploy *appsv1.Deployment) appsv1.DeploymentSpec {
@@ -264,7 +264,7 @@ func (r *NginxReconciler) getSpecFromDeployment(deploy *appsv1.Deployment) appsv
 				Containers: []corev1.Container{
 					{
 						Name:            container.Name,
-						Image:           "nginx:latest",
+						Image:           container.Image,
 						ImagePullPolicy: "IfNotPresent",
 					},
 				},
@@ -275,17 +275,17 @@ func (r *NginxReconciler) getSpecFromDeployment(deploy *appsv1.Deployment) appsv
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *NginxReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	
+
 	// reference https://github.com/kubernetes-sigs/kubebuilder/issues/549
 	r.EventRecorder = mgr.GetEventRecorderFor("nginx")
-	
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&samplev1.Nginx{}). // 注意这里需要使用指针类型的Kind，因为其start方法接收者为指针类型
 		// 使用 CR 创建 deployment 时，可以为他塞入一个从属关系，类似于 Pod 资源的Metadata 里会有一个OnwerReference字段
 		Owns(&appsv1.Deployment{}).
-		Watches(&source.Kind{Type: &samplev1.Nginx{}}, handler.Funcs{
-			DeleteFunc: r.deleteHandler,
-			UpdateFunc: r.updateHandler,
-		}).
+		//Watches(&source.Kind{Type: &samplev1.Nginx{}}, handler.Funcs{
+		//	DeleteFunc: r.deleteHandler,
+		//	UpdateFunc: r.updateHandler,
+		//}).
 		Complete(r)
 }

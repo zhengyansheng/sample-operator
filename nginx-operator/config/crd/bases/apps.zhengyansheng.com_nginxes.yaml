@@ -35,6 +35,8 @@ spec:
           spec:
             description: NginxSpec defines the desired state of Nginx
             properties:
+              image:
+                type: string
               replicas:
                 description: Foo is an example field of Nginx. Edit nginx_types.go
                   to remove/update Foo      string `json:"foo,omitempty"`

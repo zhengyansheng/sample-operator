@@ -11,4 +11,5 @@ metadata:
   namespace: default
 spec:
   # TODO(user): Add fields here
-  replicas: 2
+  replicas: 4
+  image: "nginx:latest"
