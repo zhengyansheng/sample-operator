@@ -26,12 +26,15 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -39,6 +42,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 	
 	samplev1 "github.com/zhengyansheng/sample-operator/api/v1"
+)
+
+const (
+	selectorKey = "sample.zhengyansheng.com/name"
 )
 
 // NginxReconciler reconciles a Nginx object
@@ -64,6 +71,7 @@ type NginxReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.13.0/pkg/reconcile
 func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	defer utilruntime.HandleCrash()
 	_ = log.FromContext(ctx)
 	
 	// TODO(user): your logic here
@@ -85,16 +93,20 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	
 	// create deployment
-	instance := appsv1.Deployment{}
-	err = r.Client.Get(ctx, runtimeObjectKey(req), &instance)
+	foundDeployment := appsv1.Deployment{}
+	err = r.Client.Get(ctx, runtimeObjectKey(req), &foundDeployment)
 	if errors.IsNotFound(err) {
-		instance := buildDeployment(ngx)
-		if err = r.Create(ctx, instance); err != nil {
+		foundDeployment, err := r.buildDeployment(ngx)
+		if err != nil {
+			klog.Error(err, "failed to build Deployment resource")
+			return ctrl.Result{}, err
+		}
+		if err = r.Create(ctx, foundDeployment); err != nil {
 			klog.Error(err, "failed to create Deployment resource")
 			return ctrl.Result{}, err
 		}
 		
-		r.EventRecorder.Event(instance, corev1.EventTypeNormal, "Created", fmt.Sprintf("Created deployment %v", instance.Name))
+		r.EventRecorder.Event(foundDeployment, corev1.EventTypeNormal, "Created", fmt.Sprintf("Created deployment %v", foundDeployment.Name))
 		klog.Info("created Deployment resource for nginx")
 		return ctrl.Result{}, nil
 	}
@@ -104,18 +116,18 @@ func (r *NginxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	labels := map[string]string{"sample.zhengyansheng.com/name": "nginx-sample"}
 	want := r.getDeploymentSpec(ngx, labels)
-	got := r.getSpecFromDeployment(&instance)
+	got := r.getSpecFromDeployment(&foundDeployment)
 	// https://blog.csdn.net/weixin_43915303/article/details/126751887?ops_request_misc=%257B%2522request%255Fid%2522%253A%2522166904465316800180614945%2522%252C%2522scm%2522%253A%252220140713.130102334.pc%255Fall.%2522%257D&request_id=166904465316800180614945&biz_id=0&utm_medium=distribute.pc_search_result.none-task-blog-2~all~first_rank_ecpm_v1~rank_v31_ecpm-2-126751887-null-null.142^v66^control,201^v3^control_1,213^v2^t3_esquery_v1&utm_term=kubebuilder%20mysql-operator&spm=1018.2226.3001.4187
 	if !reflect.DeepEqual(want, got) {
 		expectedReplicas := ngx.Spec.Replicas
-		instance.Spec.Replicas = &expectedReplicas
-		if err := r.Update(ctx, &instance); err != nil {
+		foundDeployment.Spec.Replicas = &expectedReplicas
+		if err := r.Update(ctx, &foundDeployment); err != nil {
 			klog.Error(err, "failed to Deployment update replica count")
 			return ctrl.Result{}, err
 		}
 		// update status
-		r.EventRecorder.Eventf(ngx, corev1.EventTypeNormal, "Upgrade", "Scaled replicas %s to %d", instance.Name, expectedReplicas)
-		ngx.Status.ReadyReplicas = instance.Status.ReadyReplicas
+		r.EventRecorder.Eventf(ngx, corev1.EventTypeNormal, "Upgrade", "Scaled replicas %s to %d", foundDeployment.Name, expectedReplicas)
+		ngx.Status.ReadyReplicas = foundDeployment.Status.ReadyReplicas
 		if err := r.Client.Status().Update(ctx, ngx); err != nil {
 			klog.Error(err, "failed to update nginx status")
 			return ctrl.Result{}, err
@@ -130,8 +142,8 @@ func runtimeObjectKey(req ctrl.Request) types.NamespacedName {
 	return client.ObjectKey{Namespace: req.Namespace, Name: req.Name}
 }
 
-func buildDeployment(c *samplev1.Nginx) *appsv1.Deployment {
-	return &appsv1.Deployment{
+func (r *NginxReconciler) buildDeployment(c *samplev1.Nginx) (*appsv1.Deployment, error) {
+	deployMent := &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Deployment",
 			APIVersion: "apps/v1",
@@ -139,18 +151,25 @@ func buildDeployment(c *samplev1.Nginx) *appsv1.Deployment {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      c.Name,
 			Namespace: c.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(c, schema.GroupVersionKind{
+					Group:   samplev1.GroupVersion.Group,
+					Version: samplev1.GroupVersion.Version,
+					Kind:    "Nginx",
+				}),
+			},
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &c.Spec.Replicas,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"sample.zhengyansheng.com/name": c.Name,
+					selectorKey: c.Name,
 				},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						"sample.zhengyansheng.com/name": c.Name,
+						selectorKey: c.Name,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -165,21 +184,13 @@ func buildDeployment(c *samplev1.Nginx) *appsv1.Deployment {
 			},
 		},
 	}
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *NginxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	
-	// reference https://github.com/kubernetes-sigs/kubebuilder/issues/549
-	r.EventRecorder = mgr.GetEventRecorderFor("nginx")
-	
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&samplev1.Nginx{}). // 注意这里需要使用指针类型的Kind，因为其start方法接收者为指针类型
-		Watches(&source.Kind{Type: &samplev1.Nginx{}}, handler.Funcs{
-			DeleteFunc: r.deleteHandler,
-			UpdateFunc: r.updateHandler,
-		}).
-		Complete(r)
+	// owner reference
+	// https://zhuanlan.zhihu.com/p/67406200
+	if err := controllerutil.SetControllerReference(c, deployMent, r.Scheme); err != nil {
+		return deployMent, err
+	}
+	return deployMent, nil
 }
 
 func (r *NginxReconciler) deleteHandler(event event.DeleteEvent, limitingInterface workqueue.RateLimitingInterface) {
@@ -260,4 +271,21 @@ func (r *NginxReconciler) getSpecFromDeployment(deploy *appsv1.Deployment) appsv
 			},
 		},
 	}
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *NginxReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	
+	// reference https://github.com/kubernetes-sigs/kubebuilder/issues/549
+	r.EventRecorder = mgr.GetEventRecorderFor("nginx")
+	
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&samplev1.Nginx{}). // 注意这里需要使用指针类型的Kind，因为其start方法接收者为指针类型
+		// 使用 CR 创建 deployment 时，可以为他塞入一个从属关系，类似于 Pod 资源的Metadata 里会有一个OnwerReference字段
+		Owns(&appsv1.Deployment{}).
+		Watches(&source.Kind{Type: &samplev1.Nginx{}}, handler.Funcs{
+			DeleteFunc: r.deleteHandler,
+			UpdateFunc: r.updateHandler,
+		}).
+		Complete(r)
 }

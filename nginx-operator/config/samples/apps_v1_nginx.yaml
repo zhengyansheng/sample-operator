@@ -11,4 +11,4 @@ metadata:
   namespace: default
 spec:
   # TODO(user): Add fields here
-  replicas: 3
+  replicas: 2
