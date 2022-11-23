@@ -20,6 +20,8 @@ import (
 	"context"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/klog/v2"
@@ -38,7 +40,8 @@ const (
 	memRequest    = "512Mi"
 	memLimit      = "512Mi"
 
-	selectorKey = "app"
+	selectorKey     = "app"
+	defaultPortName = "http"
 )
 
 // ElasticWebReconciler reconciles a ElasticWeb object
@@ -79,12 +82,17 @@ func (r *ElasticWebReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	foundDeployment := &appsv1.Deployment{}
 	err = r.Get(ctx, req.NamespacedName, foundDeployment)
 	if err != nil {
-		// 查询出问题时
 
 		if errors.IsNotFound(err) {
+			// deployment 不存在时，recreate
 
 			if *(instance.Spec.TotalQPS) < 1 {
 				return ctrl.Result{}, nil
+			}
+
+			// create deployment
+			if err = r.createDeploymentIfNotExists(ctx, instance); err != nil {
+				return ctrl.Result{}, err
 			}
 
 			// create svc
@@ -92,8 +100,8 @@ func (r *ElasticWebReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				return ctrl.Result{}, err
 			}
 
-			// create deployment
-			if err = r.createDeploymentIfNotExists(ctx, instance); err != nil {
+			// create ingress
+			if err = r.createIngressIfNotExists(ctx, req, instance); err != nil {
 				return ctrl.Result{}, err
 			}
 
@@ -135,5 +143,8 @@ func (r *ElasticWebReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *ElasticWebReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&elasticwebv1.ElasticWeb{}).
+		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Service{}).
+		Owns(&networkv1.Ingress{}).
 		Complete(r)
 }

@@ -2,13 +2,16 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 
 	elasticwebv1 "github.com/zhengyansheng/sample-operator/elasticweb-operator/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -118,7 +121,7 @@ func (r *ElasticWebReconciler) createServiceIfNotExists(ctx context.Context, req
 		},
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{{
-				Name:     "http",
+				Name:     defaultPortName,
 				Port:     8080,
 				NodePort: web.Spec.Port,
 			}},
@@ -140,6 +143,74 @@ func (r *ElasticWebReconciler) createServiceIfNotExists(ctx context.Context, req
 		return err
 	}
 	klog.Info("create service success")
+	return nil
+}
+
+func (r *ElasticWebReconciler) createIngressIfNotExists(ctx context.Context, req ctrl.Request, web *elasticwebv1.ElasticWeb) error {
+	ingress := &networkv1.Ingress{}
+	err := r.Get(ctx, req.NamespacedName, ingress)
+	if err == nil {
+		// 如果service存在，则退出
+		return nil
+	}
+	if !errors.IsNotFound(err) {
+		// 如果错误不是not found，则表示异常，直接返回错误
+		return err
+	}
+
+	// new ingress
+	pathType := networkv1.PathTypeImplementationSpecific
+	ingress = &networkv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: web.Namespace,
+			Name:      web.Name,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(web, schema.GroupVersionKind{
+					Group:   elasticwebv1.GroupVersion.Group,
+					Version: elasticwebv1.GroupVersion.Version,
+					Kind:    "ElasticWeb",
+				}),
+			},
+		},
+		Spec: networkv1.IngressSpec{
+			Rules: []networkv1.IngressRule{
+				{
+					Host: fmt.Sprintf("%v.zhengyansheng.com", web.Name),
+					IngressRuleValue: networkv1.IngressRuleValue{
+						HTTP: &networkv1.HTTPIngressRuleValue{
+							Paths: []networkv1.HTTPIngressPath{
+								{
+									Path:     "/",
+									PathType: &pathType,
+									Backend: networkv1.IngressBackend{
+										Service: &networkv1.IngressServiceBackend{
+											Name: web.Name,
+											Port: networkv1.ServiceBackendPort{
+												//Name:   defaultPortName,
+												Number: int32(containerPort),
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	klog.Info("set reference by ingress")
+	if err := controllerutil.SetControllerReference(web, ingress, r.Scheme); err != nil {
+		klog.Error(err, "set ingress controller reference err")
+		return err
+	}
+
+	// create ingress
+	if err := r.Create(ctx, ingress); err != nil {
+		klog.Error(err, "create ingress err")
+		return err
+	}
+	klog.Info("create ingress success")
 	return nil
 }
 

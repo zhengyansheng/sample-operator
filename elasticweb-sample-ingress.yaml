@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"networking.k8s.io/v1","kind":"Ingress","metadata":{"annotations":{},"name":"elasticweb-sample-ingress","namespace":"default"},"spec":{"rules":[{"host":"elasticweb.zhengyansheng.com","http":{"paths":[{"backend":{"service":{"name":"elasticweb-sample","port":{"number":8080}}},"path":"/","pathType":"ImplementationSpecific"}]}}]}}
+  creationTimestamp: "2022-11-22T15:34:34Z"
+  generation: 1
+  name: elasticweb-sample-ingress
+  namespace: default
+  resourceVersion: "600610882"
+  uid: 8ae8ec44-049b-4331-ad97-ef3606206bd3
+spec:
+  rules:
+  - host: elasticweb.zhengyansheng.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: elasticweb-sample
+            port:
+              number: 8080
+        path: /
+        pathType: ImplementationSpecific
+status:
+  loadBalancer:
+    ingress:
+    - ip: 10.240.2.23
