@@ -13,4 +13,4 @@ spec:
   image: tomcat:8.0.18-jre8
   port: 30003
   singlePodQPS: 600
-  totalQPS: 2600
+  totalQPS: 1100

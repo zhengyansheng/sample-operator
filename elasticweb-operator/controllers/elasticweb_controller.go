@@ -18,7 +18,7 @@ package controllers
 
 import (
 	"context"
-
+	
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkv1 "k8s.io/api/networking/v1"
@@ -28,7 +28,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
+	
 	elasticwebv1 "github.com/zhengyansheng/sample-operator/elasticweb-operator/api/v1"
 )
 
@@ -75,6 +75,7 @@ func (r *ElasticWebReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
+		//return ctrl.Result{RequeueAfter: time.Second * 10}, err
 		return ctrl.Result{}, err
 	}
 
